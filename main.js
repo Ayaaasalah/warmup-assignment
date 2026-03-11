@@ -147,7 +147,7 @@ function readShifts(textFile) {
     });
 }
 
-// HELPER: write shifts array back to file
+
 
 function writeShifts(textFile, shifts) {
     const lines = shifts.map(
