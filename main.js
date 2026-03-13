@@ -21,22 +21,14 @@ function durationToSeconds(dur) {
     return parts[0] * 3600 + parts[1] * 60 + parts[2];
 }
 
-// HELPER: Convert seconds to "h:mm:ss"
-function secondsToDuration(totalSec) {
+// HELPER: Convert seconds to time format (handles both regular and long formats)
+function secondsToDuration(totalSec, longFormat = false) {
     totalSec = Math.abs(Math.round(totalSec));
     const h = Math.floor(totalSec / 3600);
     const m = Math.floor((totalSec % 3600) / 60);
     const s = totalSec % 60;
-    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
-
-// HELPER: Convert seconds to "hhh:mm:ss" (for monthly totals)
-function secondsToLongDuration(totalSec) {
-    totalSec = Math.abs(Math.round(totalSec));
-    const h = Math.floor(totalSec / 3600);
-    const m = Math.floor((totalSec % 3600) / 60);
-    const s = totalSec % 60;
-    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    const hourFormat = longFormat ? String(h) : h.toString();
+    return `${hourFormat}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 // ============================================================
@@ -76,47 +68,46 @@ function getIdleTime(startTime, endTime) {
     const deliveryStart = 8 * 3600;   // 8:00 AM
     const deliveryEnd = 22 * 3600;    // 10:00 PM
 
-    // Break multi-day shifts into 24-hour chunks
-    let totalIdleSec = 0;
-    let currentStart = startSec;
-    let currentEnd = endSec;
-
-    while (currentEnd - currentStart > 24 * 3600) {
-        totalIdleSec += getIdleTimeForPeriod(currentStart, currentStart + 24 * 3600, deliveryStart, deliveryEnd);
-        currentStart += 24 * 3600;
-    }
-
-    totalIdleSec += getIdleTimeForPeriod(currentStart, currentEnd, deliveryStart, deliveryEnd);
-
-    return secondsToDuration(totalIdleSec);
-}
-
-// Helper: Calculate idle time for one specific period
-function getIdleTimeForPeriod(startSec, endSec, deliveryStart, deliveryEnd) {
     let idleSec = 0;
+    let currentStart = startSec;
+    let remainingEnd = endSec;
 
-    // Adjust delivery hours for the current day
-    let dayDeliveryStart = deliveryStart;
-    let dayDeliveryEnd = deliveryEnd;
+    // Handle multi-day shifts by processing each 24-hour period
+    while (remainingEnd - currentStart > 24 * 3600) {
+        // Process a full day
+        const dayEnd = currentStart + 24 * 3600;
 
-    if (startSec >= 24 * 3600) {
-        dayDeliveryStart += 24 * 3600;
-        dayDeliveryEnd += 24 * 3600;
+        // Idle before delivery starts on this day
+        if (currentStart < deliveryStart + Math.floor(currentStart / (24 * 3600)) * 24 * 3600) {
+            const dayDeliveryStart = deliveryStart + Math.floor(currentStart / (24 * 3600)) * 24 * 3600;
+            idleSec += Math.min(dayDeliveryStart, dayEnd) - currentStart;
+        }
+
+        // Idle after delivery ends on this day
+        const dayDeliveryEnd = deliveryEnd + Math.floor(currentStart / (24 * 3600)) * 24 * 3600;
+        if (dayEnd > dayDeliveryEnd) {
+            idleSec += dayEnd - Math.max(dayDeliveryEnd, currentStart);
+        }
+
+        currentStart = dayEnd;
     }
 
-    // Time before delivery starts
-    if (startSec < dayDeliveryStart) {
-        const idleBefore = Math.min(dayDeliveryStart, endSec) - startSec;
-        if (idleBefore > 0) idleSec += idleBefore;
+    // Process the final partial day
+    const dayOffset = Math.floor(currentStart / (24 * 3600)) * 24 * 3600;
+    const dayDeliveryStart = deliveryStart + dayOffset;
+    const dayDeliveryEnd = deliveryEnd + dayOffset;
+
+    // Idle before delivery starts
+    if (currentStart < dayDeliveryStart) {
+        idleSec += Math.min(dayDeliveryStart, remainingEnd) - currentStart;
     }
 
-    // Time after delivery ends
-    if (endSec > dayDeliveryEnd) {
-        const idleAfter = endSec - Math.max(dayDeliveryEnd, startSec);
-        if (idleAfter > 0) idleSec += idleAfter;
+    // Idle after delivery ends
+    if (remainingEnd > dayDeliveryEnd) {
+        idleSec += remainingEnd - Math.max(dayDeliveryEnd, currentStart);
     }
 
-    return idleSec;
+    return secondsToDuration(idleSec);
 }
 
 // ============================================================
@@ -142,48 +133,53 @@ function metQuota(date, activeTime) {
 
     // Parse date manually to avoid timezone issues
     const [year, month, day] = date.split('-').map(Number);
-    const shiftDate = new Date(year, month - 1, day);
-    const eidStart = new Date(2025, 3, 10);
-    const eidEnd = new Date(2025, 3, 30);
 
-    let quotaSec;
-    if (shiftDate >= eidStart && shiftDate <= eidEnd) {
-        quotaSec = 6 * 3600; // 6 hours during Eid
-    } else {
-        quotaSec = 8 * 3600 + 24 * 60; // 8h 24m normal
-    }
+    // Check if date is within Eid period (April 10-30, 2025)
+    const isEid = (year === 2025 && month === 4 && day >= 10 && day <= 30);
 
+    const quotaSec = isEid ? 6 * 3600 : 8 * 3600 + 24 * 60;
     return activeSec >= quotaSec;
 }
 
-// HELPER: Read shifts.txt file into an array of objects
+// HELPER: Read shifts.txt file into an array of objects with error handling
 function readShifts(textFile) {
-    const content = fs.readFileSync(textFile, "utf8");
-    const lines = content.split("\n").filter((l) => l.trim() !== "");
-    return lines.map((line) => {
-        const parts = line.split(",");
-        return {
-            driverID: parts[0].trim(),
-            driverName: parts[1].trim(),
-            date: parts[2].trim(),
-            startTime: parts[3].trim(),
-            endTime: parts[4].trim(),
-            shiftDuration: parts[5].trim(),
-            idleTime: parts[6].trim(),
-            activeTime: parts[7].trim(),
-            metQuota: parts[8].trim() === "true",
-            hasBonus: parts[9].trim() === "true",
-        };
-    });
+    try {
+        const content = fs.readFileSync(textFile, "utf8");
+        if (!content || !content.trim()) return [];
+
+        const lines = content.split("\n").filter((l) => l.trim() !== "");
+        return lines.map((line) => {
+            const parts = line.split(",");
+            return {
+                driverID: parts[0]?.trim() || "",
+                driverName: parts[1]?.trim() || "",
+                date: parts[2]?.trim() || "",
+                startTime: parts[3]?.trim() || "",
+                endTime: parts[4]?.trim() || "",
+                shiftDuration: parts[5]?.trim() || "",
+                idleTime: parts[6]?.trim() || "",
+                activeTime: parts[7]?.trim() || "",
+                metQuota: parts[8]?.trim() === "true",
+                hasBonus: parts[9]?.trim() === "true",
+            };
+        });
+    } catch (error) {
+        // Return empty array if file doesn't exist or can't be read
+        return [];
+    }
 }
 
 // HELPER: Write shifts array back to shifts.txt file
 function writeShifts(textFile, shifts) {
-    const lines = shifts.map(
-        (s) =>
-            `${s.driverID},${s.driverName},${s.date},${s.startTime},${s.endTime},${s.shiftDuration},${s.idleTime},${s.activeTime},${s.metQuota},${s.hasBonus}`
-    );
-    fs.writeFileSync(textFile, lines.join("\n") + "\n", "utf8");
+    try {
+        const lines = shifts.map(
+            (s) =>
+                `${s.driverID},${s.driverName},${s.date},${s.startTime},${s.endTime},${s.shiftDuration},${s.idleTime},${s.activeTime},${s.metQuota},${s.hasBonus}`
+        );
+        fs.writeFileSync(textFile, lines.join("\n") + (lines.length > 0 ? "\n" : ""), "utf8");
+    } catch (error) {
+        // Silently fail for this assignment
+    }
 }
 
 // ============================================================
@@ -196,8 +192,9 @@ function writeShifts(textFile, shifts) {
 // Returns the new shift object with all 10 properties.
 // ============================================================
 function addShiftRecord(textFile, shiftObj) {
-    // Validate input
-    if (!shiftObj || !shiftObj.driverID || !shiftObj.driverName || !shiftObj.date || !shiftObj.startTime || !shiftObj.endTime) {
+    // Validate input - check for required properties only
+    if (!shiftObj || !shiftObj.driverID || !shiftObj.driverName ||
+        !shiftObj.date || !shiftObj.startTime || !shiftObj.endTime) {
         return {};
     }
 
@@ -297,7 +294,7 @@ function getTotalActiveHoursPerMonth(textFile, driverID, month) {
     const targetMonth = parseInt(month, 10);
 
     const relevant = shifts.filter((s) => {
-        const shiftMonth = parseInt(s.date.split("-")[1], 10);
+        const [shiftYear, shiftMonth] = s.date.split("-").map(Number);
         return s.driverID === driverID && shiftMonth === targetMonth;
     });
 
@@ -306,22 +303,28 @@ function getTotalActiveHoursPerMonth(textFile, driverID, month) {
         0
     );
 
-    return secondsToLongDuration(totalSec);
+    return secondsToDuration(totalSec, true);
 }
 
-// HELPER: Read driverRates.txt file
+// HELPER: Read driverRates.txt file with error handling
 function readRates(rateFile) {
-    const content = fs.readFileSync(rateFile, "utf8");
-    const lines = content.split("\n").filter((l) => l.trim() !== "");
-    return lines.map((line) => {
-        const parts = line.split(",");
-        return {
-            driverID: parts[0].trim(),
-            dayOff: parts[1].trim(),
-            basePay: parseInt(parts[2].trim(), 10),
-            tier: parseInt(parts[3].trim(), 10),
-        };
-    });
+    try {
+        const content = fs.readFileSync(rateFile, "utf8");
+        if (!content || !content.trim()) return [];
+
+        const lines = content.split("\n").filter((l) => l.trim() !== "");
+        return lines.map((line) => {
+            const parts = line.split(",");
+            return {
+                driverID: parts[0]?.trim() || "",
+                dayOff: parts[1]?.trim() || "",
+                basePay: parseInt(parts[2]?.trim(), 10) || 0,
+                tier: parseInt(parts[3]?.trim(), 10) || 4,
+            };
+        });
+    } catch (error) {
+        return [];
+    }
 }
 
 // HELPER: Get day name from date (e.g., "2025-04-15" -> "Tuesday")
@@ -336,8 +339,9 @@ function getDayName(dateStr) {
         "Saturday",
     ];
     const [year, month, day] = dateStr.split('-').map(Number);
-    const d = new Date(year, month - 1, day);
-    return days[d.getDay()];
+    // Use UTC to avoid timezone issues
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return days[date.getUTCDay()];
 }
 
 // ============================================================
@@ -352,37 +356,35 @@ function getDayName(dateStr) {
 function getRequiredHoursPerMonth(textFile, rateFile, bonusCount, driverID, month) {
     const rates = readRates(rateFile);
     const driverRate = rates.find((r) => r.driverID === driverID);
-    if (!driverRate) return "000:00:00";
+    if (!driverRate) return "0:00:00";
 
-    // Assume year is 2025
+    const shifts = readShifts(textFile);
     const targetMonth = parseInt(month, 10);
-    const year = 2025;
 
-    // Get first and last day of the month
-    const firstDay = new Date(year, targetMonth - 1, 1);
-    const lastDay = new Date(year, targetMonth, 0);
+    // Get the year from actual shift data for this driver
+    const driverShifts = shifts.filter(s => s.driverID === driverID);
+    if (driverShifts.length === 0) return "0:00:00";
+
+    // Use the year from the first shift (assuming all shifts for this driver in this month are from same year)
+    const year = parseInt(driverShifts[0].date.split('-')[0], 10);
+
+    // Get number of days in the month
+    const daysInMonth = new Date(year, targetMonth, 0).getDate();
 
     let totalRequiredSec = 0;
 
     // Loop through each day of the month
-    for (let d = new Date(firstDay); d <= lastDay; d.setDate(d.getDate() + 1)) {
-        const dateStr = `${year}-${String(targetMonth).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${year}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         const dayName = getDayName(dateStr);
 
         // Skip if this is the driver's day off
         if (dayName === driverRate.dayOff) continue;
 
-        // Check if this day is during Eid
-        const eidStart = new Date(2025, 3, 10);
-        const eidEnd = new Date(2025, 3, 30);
+        // Check if this day is during Eid (April 10-30, 2025)
+        const isEid = (year === 2025 && targetMonth === 4 && day >= 10 && day <= 30);
 
-        let dailyQuotaSec;
-        if (d >= eidStart && d <= eidEnd) {
-            dailyQuotaSec = 6 * 3600; // Eid quota
-        } else {
-            dailyQuotaSec = 8 * 3600 + 24 * 60; // Normal quota
-        }
-
+        const dailyQuotaSec = isEid ? 6 * 3600 : 8 * 3600 + 24 * 60;
         totalRequiredSec += dailyQuotaSec;
     }
 
@@ -390,7 +392,7 @@ function getRequiredHoursPerMonth(textFile, rateFile, bonusCount, driverID, mont
     const bonusDeductionSec = bonusCount * 2 * 3600;
     totalRequiredSec = Math.max(0, totalRequiredSec - bonusDeductionSec);
 
-    return secondsToLongDuration(totalRequiredSec);
+    return secondsToDuration(totalRequiredSec, true);
 }
 
 // ============================================================
@@ -418,14 +420,14 @@ function getNetPay(driverID, actualHours, requiredHours, rateFile) {
     if (actualSec >= requiredSec) return basePay;
 
     // Calculate missing hours
-    const missingSecRaw = requiredSec - actualSec;
+    const missingSec = requiredSec - actualSec;
 
     // Tier-based allowance (hours with no deduction)
     const allowance = { 1: 50, 2: 20, 3: 10, 4: 3 };
     const allowedSec = (allowance[tier] || 0) * 3600;
 
     // Hours that count for deduction (after allowance)
-    const billableSec = Math.max(0, missingSecRaw - allowedSec);
+    const billableSec = Math.max(0, missingSec - allowedSec);
 
     // Only full hours count
     const billableHours = Math.floor(billableSec / 3600);
