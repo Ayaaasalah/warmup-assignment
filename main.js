@@ -60,7 +60,7 @@ function getShiftDuration(startTime, endTime) {
 }
 
 // ============================================================
-// Function 2: Calculates idle hours outside delivery hours (8 AM to 10 PM) and returns as h:mm:ss
+// Function 2: Calculates idle hours outside delivery hours (8 AM to 10 PM) and returns as h:mm:SS
 // ============================================================
 function getIdleTime(startTime, endTime) {
     const startSecond = timeToSeconds(startTime);
