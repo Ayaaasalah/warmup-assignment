@@ -293,8 +293,8 @@ function getDayName(dateStr) {
 // ============================================================
 // Function 9: Calculates total required hours for a driver in a month (excluding day off, adjusting for bonuses and Eid) and returns as hhh:mm:ss
 // ============================================================
+// More robust implementation would:
 function getRequiredHoursPerMonth(textFile, rateFile, bonusCount, driverID, month) {
-    const shifts = readShifts(textFile);
     const rates = readRates(rateFile);
 
     let driverRate = null;
@@ -307,36 +307,41 @@ function getRequiredHoursPerMonth(textFile, rateFile, bonusCount, driverID, mont
 
     if (driverRate === null) return "0:00:00";
 
+    // Get the year from the shifts file or assume 2025
+    const year = 2025;
+    const targetMonth = parseInt(month);
+
+    // Calculate days in month
+    const daysInMonth = new Date(year, targetMonth, 0).getDate();
+
     let totalRequiredSec = 0;
-    let targetMonth = parseInt(month);
 
-    for (let i = 0; i < shifts.length; i++) {
-        let shift = shifts[i];
-        let shiftMonth = parseInt(shift.date.split("-")[1]);
+    // Loop through all days of the month
+    for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${year}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const dayName = getDayName(dateStr);
 
-        if (shift.driverID !== driverID) continue;
-        if (shiftMonth !== targetMonth) continue;
-
-        let dayName = getDayName(shift.date);
+        // Skip day off
         if (dayName === driverRate.dayOff) continue;
 
-        let shiftDate = new Date(shift.date);
-        let eidStart = new Date("2025-04-10");
-        let eidEnd = new Date("2025-04-30");
+        // Check if date is in Eid period
+        const currentDate = new Date(dateStr);
+        const eidStart = new Date("2025-04-10");
+        const eidEnd = new Date("2025-04-30");
 
-        if (shiftDate >= eidStart && shiftDate <= eidEnd) {
-            totalRequiredSec += 6 * 3600;
+        if (currentDate >= eidStart && currentDate <= eidEnd) {
+            totalRequiredSec += 6 * 3600; // 6 hours for Eid
         } else {
-            totalRequiredSec += 8 * 3600 + 24 * 60;
+            totalRequiredSec += 8 * 3600 + 24 * 60; // 8h24m for normal days
         }
     }
 
-    totalRequiredSec = totalRequiredSec - bonusCount * 2 * 3600;
+    // Subtract bonus hours
+    totalRequiredSec = totalRequiredSec - (bonusCount * 2 * 3600);
     if (totalRequiredSec < 0) totalRequiredSec = 0;
 
     return secondsToLongDuration(totalRequiredSec);
 }
-
 // ============================================================
 // Function 10: Calculates net monthly pay by applying tier-based deductions for missing hours
 // ============================================================
