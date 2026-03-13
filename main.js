@@ -79,7 +79,7 @@ function getIdleTime(startTime, endTime) {
 
     // Idle after 10 PM
     if (endSec > deliveryEnd) {
-        const idleAfter = endSec - Math.max(deliveryEnd, startSec);
+        const idleAfter = endSec - Math.max(deliveryEnd, startSecond);
         if (idleAfter > 0) idleSec += idleAfter;
     }
 
